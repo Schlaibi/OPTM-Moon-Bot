@@ -56,6 +56,11 @@ async def main():
             by_sid.setdefault(ev.structure_id, []).append(ev)
         ids = {e.moon_id for e in events.values()} | {t for e in events.values() for t in e.ore_types}
         names = await esi.names(list(ids))
+        prices = await esi.prices()
+        if db_host:
+            yields = await db.refine_yields(L.MOON_ORE_CLASS)
+            print(f"SeAT DB: refine yields for {len(yields)} ore types")
+            prices = L.ore_unit_prices(prices, yields)
         for a in athanors:
             mine = [x for x in xs if x.structure_id == a.structure_id]
             st = L.compute_state(L.merge_extractions(by_sid.get(a.structure_id, []), mine), now)
@@ -63,7 +68,9 @@ async def main():
             print(f"  moon={names.get(st.moon_id)} phase={st.phase} ready={st.ready} "
                   f"progress={st.progress(now):.0%} extraction_rows={len(mine)}")
             pairs = L.ore_breakdown(st.volumes, st.ore_types, None)
-            print("    ore:", ", ".join(f"{L.ore_name(t, i + 1, names)} {L.fmt_volume(v)}"
+            print(f"  class={L.class_tag(L.moon_class(pairs, names))} "
+                  f"value={L.fmt_isk(L.total_value(pairs, prices) or 0)}")
+            print("    ore:", ", ".join(f"{L.ore_label(t, i + 1, names)} {L.fmt_volume(v)}"
                                        for i, (t, v) in enumerate(pairs)),
                   "(last extraction)" if st.ore_is_last else "")
 

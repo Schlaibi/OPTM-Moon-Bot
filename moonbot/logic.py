@@ -245,9 +245,83 @@ def ore_name(tid: int | None, idx: int, names: dict[int, str]) -> str:
     return names.get(tid, f"Type {tid}") if tid else f"Ore #{idx}"
 
 
-def ore_lines(pairs: list[tuple[int | None, float]], names: dict[int, str]) -> str:
-    lines = [f"• {ore_name(t, i + 1, names)} — {fmt_volume(v)}" for i, (t, v) in enumerate(pairs)]
-    lines.append(f"**Total:** {fmt_volume(sum(v for _, v in pairs))}")
+# Moon ore rarity by base ore name. Variants ("Brimful Zeolites", "Shining Xenotime", ...)
+# end with the base name, so the last word decides.
+MOON_ORE_CLASS = {
+    **dict.fromkeys(("Zeolites", "Sylvite", "Bitumens", "Coesite"), 4),
+    **dict.fromkeys(("Cobaltite", "Euxenite", "Titanite", "Scheelite"), 8),
+    **dict.fromkeys(("Otavite", "Sperrylite", "Vanadinite", "Chromite"), 16),
+    **dict.fromkeys(("Carnotite", "Zircon", "Pollucite", "Cinnabar"), 32),
+    **dict.fromkeys(("Xenotime", "Monazite", "Loparite", "Ytterbite"), 64),
+}
+CLASS_ICON = {4: "⚪", 8: "🟢", 16: "🔵", 32: "🟣", 64: "🟠"}
+MOON_ORE_M3_PER_UNIT = 10.0
+
+
+def ore_class(name: str | None) -> int | None:
+    """Rarity (4/8/16/32/64) of a moon ore name, None if not a moon ore / unknown."""
+    return MOON_ORE_CLASS.get(name.split()[-1]) if name else None
+
+
+def moon_class(pairs: list[tuple[int | None, float]], names: dict[int, str]) -> int | None:
+    """A moon is classed by its rarest ore (an R64 moon has at least one R64 ore)."""
+    classes = [c for t, _ in pairs if (c := ore_class(names.get(t)))]
+    return max(classes) if classes else None
+
+
+def class_tag(c: int | None) -> str:
+    return f"{CLASS_ICON[c]} R{c}" if c else ""
+
+
+def ore_value(tid: int | None, m3: float, prices: dict[int, float]) -> float | None:
+    """Rough ISK value of a chunk part: units × ESI average price of the raw ore."""
+    price = prices.get(tid) if tid else None
+    return m3 / MOON_ORE_M3_PER_UNIT * price if price else None
+
+
+def ore_unit_prices(market: dict[int, float],
+                    yields: dict[int, tuple[int, list[tuple[int, int]]]]) -> dict[int, float]:
+    """ISK per unit of ore. Raw moon ore barely trades, so its market average is noise;
+    the refined value (moon goo + minerals, 100% yield) is used wherever yields are known."""
+    out = dict(market)
+    for tid, (portion, mats) in yields.items():
+        value = sum(qty * market.get(mat, 0.0) for mat, qty in mats)
+        if value:
+            out[tid] = value / max(portion, 1)
+    return out
+
+
+def fmt_isk(isk: float) -> str:
+    if isk >= 1e9:
+        return f"{isk / 1e9:.2f}B ISK"
+    if isk >= 1e6:
+        return f"{isk / 1e6:.0f}M ISK"
+    return f"{isk / 1e3:.0f}k ISK"
+
+
+def total_value(pairs: list[tuple[int | None, float]], prices: dict[int, float]) -> float | None:
+    vals = [ore_value(t, v, prices) for t, v in pairs]
+    return sum(v for v in vals if v) if any(vals) else None
+
+
+def ore_label(tid: int | None, idx: int, names: dict[int, str]) -> str:
+    """'🟠 R64 Monazite' (or just the name if the rarity is unknown)."""
+    name = ore_name(tid, idx, names)
+    tag = class_tag(ore_class(names.get(tid)))
+    return f"{tag} {name}" if tag else name
+
+
+def ore_lines(pairs: list[tuple[int | None, float]], names: dict[int, str],
+              prices: dict[int, float] | None = None) -> str:
+    prices = prices or {}
+    lines = []
+    for i, (t, v) in enumerate(pairs):
+        val = ore_value(t, v, prices)
+        lines.append(f"{ore_label(t, i + 1, names)} — {fmt_volume(v)}"
+                     + (f" · ~{fmt_isk(val)}" if val else ""))
+    total = fmt_volume(sum(v for _, v in pairs))
+    tv = total_value(pairs, prices)
+    lines.append(f"**Total:** {total}" + (f" · **~{fmt_isk(tv)}**" if tv else ""))
     if any(t is None for t, _ in pairs):
         lines.append("_Ore names unknown — set them once with `/moons ores`_")
     return "\n".join(lines)
@@ -296,9 +370,14 @@ def parse_structure(raw: dict) -> StructureInfo | None:
 
 def render_status(s: StructureInfo, st: MoonState, names: dict[int, str],
                   now: datetime, warn_days: int,
-                  configured_ores: list[int] | None = None) -> dict:
+                  configured_ores: list[int] | None = None,
+                  prices: dict[int, float] | None = None) -> dict:
     """Return a discord embed as a plain dict (discord.Embed.from_dict)."""
     moon = names.get(st.moon_id, s.system) if st.moon_id else s.system
+    pairs = ore_breakdown(st.volumes, st.ore_types, configured_ores) if st.volumes else []
+    if not pairs and configured_ores:  # no volumes yet, but /moons ores tells the class
+        pairs = [(t, 0.0) for t in configured_ores]
+    mclass = moon_class(pairs, names)
     lines: list[str] = []
 
     if st.phase == PHASE_DRILLING:
@@ -328,16 +407,15 @@ def render_status(s: StructureInfo, st: MoonState, names: dict[int, str],
     fields = [{"name": "⛽ Fuel", "value": fuel, "inline": False}]
     if st.volumes:
         title = "🪨 Last extraction" if st.ore_is_last else "🪨 Ore"
-        pairs = ore_breakdown(st.volumes, st.ore_types, configured_ores)
-        fields.append({"name": title, "value": ore_lines(pairs, names), "inline": False})
+        fields.append({"name": title, "value": ore_lines(pairs, names, prices), "inline": False})
 
     return {
-        "title": f"🌕 {moon}",
+        "title": f"🌕 {moon}" + (f" · {class_tag(mclass)}" if mclass else ""),
         "description": f"**{s.name}**\n"
                        + (f"🏷️ Rented from {s.rented_from}\n" if s.rented_from else "")
                        + "\n" + "\n".join(lines),
         "color": COLOR.get(st.phase, COLOR[PHASE_UNKNOWN]),
         "fields": fields,
-        "footer": {"text": "Last update"},
+        "footer": {"text": "Last update" + (" · value ≈ refined, ESI average prices" if prices and st.volumes else "")},
         "timestamp": now.isoformat(),
     }

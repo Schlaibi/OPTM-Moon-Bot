@@ -122,7 +122,7 @@ def test_render_status():
     names = {40349232: "XX-TEST VII - Moon 3", 45492: "Sylvite"}
     now = START + timedelta(days=1)
     e = L.render_status(s, L.compute_state([started()], now), names, now, 7)
-    assert e["title"] == "🌕 XX-TEST VII - Moon 3"
+    assert e["title"] == "🌕 XX-TEST VII - Moon 3 · ⚪ R4"
     assert "Drilling" in e["description"] and "━" in e["description"]
     assert "Sylvite" in e["fields"][1]["value"]
 
@@ -205,3 +205,33 @@ def test_cancel_notification_beats_extraction_row():
     cancel = L.MoonEvent(L.EV_CANCELLED, START + timedelta(days=1), SID)
     st = L.compute_state(L.merge_extractions([cancel], [extraction()]), START + timedelta(days=2))
     assert st.phase == L.PHASE_IDLE
+
+
+def test_ore_class_and_value():
+    names = {45491: "Sylvite", 45511: "Monazite", 46312: "Brimful Zeolites"}
+    assert L.ore_class("Monazite") == 64 and L.ore_class("Brimful Zeolites") == 4
+    assert L.ore_class("Veldspar") is None and L.ore_class(None) is None
+    pairs = [(45491, 1_000_000.0), (45511, 500_000.0)]
+    assert L.moon_class(pairs, names) == 64 and L.class_tag(64) == "🟠 R64"
+    prices = {45491: 100.0, 45511: 1000.0}
+    assert L.total_value(pairs, prices) == 100_000 * 100 + 50_000 * 1000
+    text = L.ore_lines(pairs, names, prices)
+    assert "⚪ R4 Sylvite" in text and "🟠 R64 Monazite" in text and "60M ISK" in text
+
+
+def test_render_status_shows_moon_class():
+    s = L.StructureInfo(SID, "XX-TEST - Test Refinery", "XX-TEST", START + timedelta(days=30))
+    names = {40349232: "XX-TEST VII - Moon 3", 45490: "Zeolites", 45491: "Sylvite",
+             45492: "Bitumens", 46312: "Monazite"}
+    now = START + timedelta(days=1)
+    e = L.render_status(s, L.compute_state([started()], now), names, now, 7, prices={45492: 50.0})
+    assert e["title"].endswith("🟠 R64")
+    assert "ISK" in e["fields"][1]["value"] and "ESI" in e["footer"]["text"]
+
+
+def test_refined_value_beats_raw_market_price():
+    market = {45497: 20.0, 36: 100.0, 16639: 1000.0}   # raw Scheelite noise; materials
+    yields = {45497: (100, [(36, 100), (16639, 65)])}
+    prices = L.ore_unit_prices(market, yields)
+    assert prices[45497] == (100 * 100 + 65 * 1000) / 100
+    assert prices[36] == 100.0

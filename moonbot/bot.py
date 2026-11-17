@@ -50,6 +50,12 @@ SEAT_DB_PASSWORD = env("SEAT_DB_PASSWORD", "")
 K_STATUS_CH, K_PING_CH, K_PING_ROLE, K_FUEL_WARN = "status_channel", "ping_channel", "ping_role", "fuel_warn_days"
 
 
+def pop_total(pairs, prices) -> str:
+    total = L.fmt_volume(sum(v for _, v in pairs))
+    value = L.total_value(pairs, prices)
+    return f"{total} · ~{L.fmt_isk(value)}" if value else total
+
+
 class MoonBot(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.default())
@@ -63,6 +69,8 @@ class MoonBot(discord.Client):
         self.tracked_ids: set[int] | None = None  # own + watched Athanors; only these get pinged
         self.candidates: dict[int, tuple[int | None, str]] = {}  # rentable, not yet watched
         self.extractions: dict[int, list[L.Extraction]] = {}  # from SeAT DB, per structure
+        self.prices: dict[int, float] = {}  # ESI average prices, refreshed every few hours
+        self.prices_at: datetime | None = None
         self.tree.add_command(build_commands(self))
 
     async def setup_hook(self):
@@ -109,6 +117,25 @@ class MoonBot(discord.Client):
             except Exception:
                 log.exception("ESI name lookup failed")
         return known
+
+    async def get_prices(self) -> dict[int, float]:
+        now = datetime.now(timezone.utc)
+        if self.prices_at is None or now - self.prices_at > timedelta(hours=6):
+            try:
+                market = await self.esi.prices()
+                yields = {}
+                if self.seatdb:
+                    try:
+                        yields = await self.seatdb.refine_yields(L.MOON_ORE_CLASS)
+                    except Exception as e:
+                        log.info("No refine yields from SeAT DB, using raw ore prices (%s)", e)
+                self.prices = L.ore_unit_prices(market, yields)
+                log.info("Prices loaded: %d market types, %d ore types valued by refine yield",
+                         len(market), len(yields))
+            except Exception:
+                log.exception("ESI price lookup failed")
+            self.prices_at = now  # also after a failure: retry in 6h, not every loop
+        return self.prices
 
     def events(self, structure_id: int) -> list[L.MoonEvent]:
         """Stored notification events plus extraction-table entries without a notification."""
@@ -192,8 +219,8 @@ class MoonBot(discord.Client):
             moon=names.get(ev.moon_id, "A moon"),
             structure=ev.structure_name or str(ev.structure_id),
             system=names.get(ev.solar_system_id, "?"),
-            ore_names=[L.ore_name(t, i + 1, names) for i, (t, _) in enumerate(pairs)],
-            total=L.fmt_volume(sum(ev.volumes)) if ev.volumes else None,
+            ore_names=[L.ore_label(t, i + 1, names) for i, (t, _) in enumerate(pairs)],
+            total=pop_total(pairs, await self.get_prices()) if ev.volumes else None,
             collector=TAX_COLLECTOR,
         )
         role = self.store.get(K_PING_ROLE)
@@ -288,6 +315,7 @@ class MoonBot(discord.Client):
             ids.update(st.ore_types)
             ids.update(configured[sid] or [])
         names = await self.resolve_names(ids)
+        prices = await self.get_prices()
         self.known_moons = {s.structure_id: (s.name, states[s.structure_id]) for s in structures}
         if ch is None:  # not set up yet: only refresh the cache for /moons ores
             return len(structures)
@@ -301,7 +329,7 @@ class MoonBot(discord.Client):
         for s in structures:
             embed = discord.Embed.from_dict(
                 L.render_status(s, states[s.structure_id], names, now, self.warn_days(),
-                                configured[s.structure_id]))
+                                configured[s.structure_id], prices))
             await self.upsert_message(ch, s.structure_id, existing.get(s.structure_id), embed)
 
         gone = set(existing) - {s.structure_id for s in structures}

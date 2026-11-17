@@ -143,6 +143,21 @@ class SeatDb:
                            utc(r["extraction_start_time"]), utc(r["chunk_arrival_time"]),
                            utc(r["natural_decay_time"])) for r in rows]
 
+    async def refine_yields(self, base_names) -> dict[int, tuple[int, list[tuple[int, int]]]]:
+        """Reprocessing yields from SeAT's SDE copy for all ore types whose name ends in
+        one of `base_names` (incl. variants): type id -> (portion size, [(material, qty)])."""
+        names = list(base_names)
+        sql = ("SELECT m.typeID AS tid, m.materialTypeID AS mat, m.quantity AS qty, "
+               "t.portionSize AS portion FROM invTypeMaterials m "
+               "JOIN invTypes t ON t.typeID = m.typeID WHERE "
+               + " OR ".join(["t.typeName LIKE %s"] * len(names)))
+        rows = await asyncio.to_thread(self._select, sql, [f"%{n}" for n in names])
+        out: dict[int, tuple[int, list[tuple[int, int]]]] = {}
+        for r in rows:
+            portion, mats = out.setdefault(int(r["tid"]), (int(r["portion"] or 1), []))
+            mats.append((int(r["mat"]), int(r["qty"])))
+        return out
+
     async def structure_info(self, structure_ids: list[int]) -> dict[int, dict]:
         """Name / type / system of structures SeAT knows (universe_structures). Best effort."""
         if not structure_ids:
@@ -168,6 +183,14 @@ class EsiClient:
             r.raise_for_status()
             data = await r.json()
         return {row["name"].lower(): int(row["id"]) for row in data.get("inventory_types") or []}
+
+    async def prices(self) -> dict[int, float]:
+        """Public ESI market prices: type id -> average price (adjusted as fallback)."""
+        async with self.s.get(f"{ESI_BASE}/markets/prices/", headers={"User-Agent": USER_AGENT}) as r:
+            r.raise_for_status()
+            data = await r.json()
+        return {int(p["type_id"]): float(p.get("average_price") or p.get("adjusted_price") or 0)
+                for p in data if p.get("average_price") or p.get("adjusted_price")}
 
     async def _moon_name(self, moon_id: int) -> dict[int, str]:
         async with self.s.get(f"{ESI_BASE}/universe/moons/{moon_id}/",

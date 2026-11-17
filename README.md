@@ -109,6 +109,8 @@ Hat SeAT die Strukturen des Vermieters (euer Charakter hat dort Rollen), zeigt d
 - **Ein gesprengter Belt** gilt 48 h nach dem Pop als weg, danach steht der Mond auf „Idle“ mit der letzten Ore-Zusammensetzung.
 - **Verzögerung:** ESI-Cache (~10 min) + SeAT-Abholintervall + `NOTIF_INTERVAL_MIN`.
 
+- **Mondklasse und Wert:** Jedes Erz bekommt seine Klasse (⚪ R4, 🟢 R8, 🔵 R16, 🟣 R32, 🟠 R64), der Mond die Klasse seines seltensten Erzes. Der Wert ist der Refine-Wert bei 100 % Ausbeute (Ausbeute aus der SDE-Tabelle `invTypeMaterials` in der SeAT-DB, Preise aus dem öffentlichen ESI-Durchschnitt, alle 6 h aktualisiert). Ohne SeAT-DB nimmt der Bot den Marktpreis des Roherzes, der ist bei Mond-Erz aber sehr ungenau.
+
 Sprüche für die Pop-Nachricht stehen in `moonbot/messages.py`, einfach erweitern.
 
 ## Entwicklung
