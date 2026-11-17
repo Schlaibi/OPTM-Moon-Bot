@@ -114,9 +114,12 @@ class MoonBot(discord.Client):
     async def poll_notifications(self) -> int:
         """Fetch moon notifications, store new events, announce fresh pops. Returns #new events."""
         first_run = self.store.event_count() == 0
-        source = "db" if self.seatdb else "api"
-        # Read the whole history on first run or after switching source (to pick up
-        # ore type ids for stored events); afterwards only the last few days.
+        # The character list is part of the key: adding a character (e.g. a renter)
+        # triggers one full import, so its older ExtractionStarted events arrive too.
+        chars = ",".join(sorted(str(c) for c in NOTIFY_CHAR_IDS))
+        source = f"{'db' if self.seatdb else 'api'}:{chars}"
+        # Read the whole history on first run, after switching source (to pick up
+        # ore type ids for stored events) or characters; afterwards only the last few days.
         full = first_run or self.store.get("events_source") != source
         since = None if full else datetime.now(timezone.utc) - timedelta(days=3)
 
@@ -152,7 +155,8 @@ class MoonBot(discord.Client):
                 self.store.mark_announced(ev.key)
         self.store.set("events_source", source)
         if full:
-            log.info("Full import from %s: %d moon events", source, len(events))
+            log.info("Full import (%s, %d chars): %d moon events",
+                     source.split(":")[0], len(NOTIFY_CHAR_IDS), len(events))
         return changed
 
     async def announce_current_pop(self, structure_id: int) -> str | None:

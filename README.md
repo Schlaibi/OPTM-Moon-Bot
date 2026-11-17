@@ -99,7 +99,7 @@ Für Monde, die ihr von einer anderen Corp mietet:
 Hat SeAT die Strukturen des Vermieters (euer Charakter hat dort Rollen), zeigt der Post auch den Fuel-Stand. Sonst kommen Status, Erze und Pops aus den Notifications des Mieter-Charakters, und beim Fuel steht „Unknown“. Pings gibt es nur für eigene und gemietete Monde auf der Watchlist, auch wenn der Charakter Notifications für weitere Monde des Vermieters bekommt.
 
 ## Verhalten
-- **Erster Start:** Alle vorhandenen Notifications werden importiert, aber **nicht** gepingt.
+- **Erster Start:** Alle vorhandenen Notifications werden importiert, aber **nicht** gepingt. Danach liest der Bot nur noch die letzten 3 Tage. Ändert sich `NOTIFY_CHAR_IDS` (z. B. ein Mieter-Charakter kommt dazu), wird einmal wieder alles importiert.
 - **Pings** gibt es nur für Pops, die jünger als `PING_MAX_AGE_H` (Standard 6 h) sind. War der Bot länger offline, kommt kein verspäteter Ping-Spam.
 - **Doppelte Events** von mehreren Charakteren werden über Struktur, Typ und Minute zusammengelegt.
 - **Gelöschte Status-Posts** werden beim nächsten Update neu erstellt. Wird ein Athanor entfernt, verschwindet auch sein Post.
