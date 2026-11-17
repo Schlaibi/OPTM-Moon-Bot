@@ -148,13 +148,13 @@ class SeatDb:
         one of `base_names` (incl. variants): type id -> (portion size, [(material, qty)])."""
         names = list(base_names)
         sql = ("SELECT m.typeID AS tid, m.materialTypeID AS mat, m.quantity AS qty, "
-               "t.portionSize AS portion FROM invTypeMaterials m "
+               "t.portionSize AS psize FROM invTypeMaterials m "
                "JOIN invTypes t ON t.typeID = m.typeID WHERE "
                + " OR ".join(["t.typeName LIKE %s"] * len(names)))
         rows = await asyncio.to_thread(self._select, sql, [f"%{n}" for n in names])
         out: dict[int, tuple[int, list[tuple[int, int]]]] = {}
         for r in rows:
-            portion, mats = out.setdefault(int(r["tid"]), (int(r["portion"] or 1), []))
+            portion, mats = out.setdefault(int(r["tid"]), (int(r["psize"] or 1), []))
             mats.append((int(r["mat"]), int(r["qty"])))
         return out
 
