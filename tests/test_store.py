@@ -13,11 +13,21 @@ def ev(t="MoonminingLaserFired", minute=0):
 
 def test_event_roundtrip_and_dedup():
     s = Store(":memory:")
-    assert s.add_event(ev(), announced=False)
-    assert not s.add_event(ev(), announced=False)  # same key from another char
-    assert s.add_event(ev(minute=5), announced=True)
+    assert s.add_event(ev(), announced=False) == "new"
+    assert s.add_event(ev(), announced=False) == "same"  # same key from another char
+    assert s.add_event(ev(minute=5), announced=True) == "new"
     back = s.events_for(42)
     assert len(back) == 2 and back[0].volumes == [1.5, 2.5] and back[0].ready_time.tzinfo
+
+
+def test_event_upgraded_when_ore_ids_arrive():
+    s = Store(":memory:")
+    s.add_event(ev(), announced=True)           # from SeAT API: no type ids
+    with_ids = ev()
+    with_ids.ore_types = [45490, 45491]
+    assert s.add_event(with_ids, announced=True) == "updated"  # from SeAT DB
+    assert s.events_for(42)[0].ore_types == [45490, 45491]
+    assert s.add_event(with_ids, announced=True) == "same"
 
 
 def test_settings_messages_names():

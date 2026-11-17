@@ -1,5 +1,6 @@
 .env
 data/
+docker-compose.override.yml
 *.db
 __pycache__/
 .pytest_cache/

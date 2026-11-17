@@ -1,0 +1,14 @@
+# Optional: lets the bot reach SeAT's MariaDB container.
+# Copy to docker-compose.override.yml (loaded automatically by `docker compose`)
+# and set SEAT_NETWORK in .env to the docker network SeAT's database is on
+# (find it with: docker inspect <seat-db-container> --format '{{json .NetworkSettings.Networks}}').
+services:
+  moonbot:
+    networks:
+      - default
+      - seat
+
+networks:
+  seat:
+    external: true
+    name: ${SEAT_NETWORK:-seat-network}

@@ -74,14 +74,22 @@ class Store:
         self.db.commit()
 
     # events
-    def add_event(self, ev: MoonEvent, announced: bool) -> bool:
-        """Insert; returns True if the event was new."""
-        cur = self.db.execute(
-            "INSERT OR IGNORE INTO events(event_key, structure_id, type, ts, data, announced) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (ev.key, ev.structure_id, ev.type, ev.timestamp.isoformat(), _event_to_json(ev), int(announced)))
-        self.db.commit()
-        return cur.rowcount == 1
+    def add_event(self, ev: MoonEvent, announced: bool) -> str:
+        """Insert an event. Returns "new", "updated" (stored copy gained ore type ids,
+        e.g. after switching from the SeAT API to the SeAT DB) or "same"."""
+        row = self.db.execute("SELECT data FROM events WHERE event_key=?", (ev.key,)).fetchone()
+        if row is None:
+            self.db.execute(
+                "INSERT INTO events(event_key, structure_id, type, ts, data, announced) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (ev.key, ev.structure_id, ev.type, ev.timestamp.isoformat(), _event_to_json(ev), int(announced)))
+            self.db.commit()
+            return "new"
+        if ev.ore_types and not _event_from_json(row[0]).ore_types:
+            self.db.execute("UPDATE events SET data=? WHERE event_key=?", (_event_to_json(ev), ev.key))
+            self.db.commit()
+            return "updated"
+        return "same"
 
     def mark_announced(self, key: str) -> None:
         self.db.execute("UPDATE events SET announced=1 WHERE event_key=?", (key,))

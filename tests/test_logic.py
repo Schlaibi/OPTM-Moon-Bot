@@ -144,6 +144,13 @@ SEAT_REAL = {
 }
 
 
+def test_parse_db_row():
+    """SeAT DB row: naive datetime timestamp, raw YAML text with type ids."""
+    row = {"type": L.EV_STARTED, "timestamp": START.replace(tzinfo=None), "text": STARTED_YAML}
+    ev = L.parse_notification(row)
+    assert ev.timestamp == START and ev.ore_types == [45490, 45491, 45492, 46312]
+
+
 def test_parse_real_seat_payload():
     ev = L.parse_notification(SEAT_REAL)
     assert ev.timestamp == datetime(2026, 11, 17, 9, 2, tzinfo=UTC)

@@ -12,7 +12,7 @@ from discord import app_commands
 from discord.ext import tasks
 
 from . import logic as L
-from .clients import EsiClient, SeatClient
+from .clients import EsiClient, SeatClient, SeatDb
 from .messages import build_pop
 from .store import Store
 
@@ -38,6 +38,13 @@ STATUS_INTERVAL_MIN = int(env("STATUS_INTERVAL_MIN", "60"))
 NOTIF_INTERVAL_MIN = int(env("NOTIF_INTERVAL_MIN", "10"))
 PING_MAX_AGE_H = int(env("PING_MAX_AGE_H", "6"))  # never ping for pops older than this
 
+# Optional: read notifications straight from SeAT's MariaDB (keeps the ore type ids)
+SEAT_DB_HOST = env("SEAT_DB_HOST", "")
+SEAT_DB_PORT = int(env("SEAT_DB_PORT", "3306"))
+SEAT_DB_NAME = env("SEAT_DB_NAME", "seat")
+SEAT_DB_USER = env("SEAT_DB_USER", "seat")
+SEAT_DB_PASSWORD = env("SEAT_DB_PASSWORD", "")
+
 K_STATUS_CH, K_PING_CH, K_PING_ROLE, K_FUEL_WARN = "status_channel", "ping_channel", "ping_role", "fuel_warn_days"
 
 
@@ -57,6 +64,9 @@ class MoonBot(discord.Client):
         self.http_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60))
         self.seat = SeatClient(self.http_session, SEAT_URL, SEAT_TOKEN)
         self.esi = EsiClient(self.http_session)
+        self.seatdb = SeatDb(SEAT_DB_HOST, SEAT_DB_PORT, SEAT_DB_NAME, SEAT_DB_USER,
+                             SEAT_DB_PASSWORD) if SEAT_DB_HOST else None
+        log.info("Notification source: %s", f"SeAT DB @ {SEAT_DB_HOST}" if self.seatdb else "SeAT API")
         if GUILD_ID:
             guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)
@@ -100,31 +110,42 @@ class MoonBot(discord.Client):
     async def poll_notifications(self) -> int:
         """Fetch moon notifications, store new events, announce fresh pops. Returns #new events."""
         first_run = self.store.event_count() == 0
-        # First run reads the whole history; afterwards only the newest pages.
-        since = None if first_run else datetime.now(timezone.utc) - timedelta(days=3)
+        source = "db" if self.seatdb else "api"
+        # Read the whole history on first run or after switching source (to pick up
+        # ore type ids for stored events); afterwards only the last few days.
+        full = first_run or self.store.get("events_source") != source
+        since = None if full else datetime.now(timezone.utc) - timedelta(days=3)
+
+        rows: list[dict] = []
+        if self.seatdb:
+            rows = await self.seatdb.moon_notifications(NOTIFY_CHAR_IDS, since)
+        else:
+            for cid in NOTIFY_CHAR_IDS:
+                try:
+                    rows += await self.seat.moon_notifications(cid, since)
+                except Exception:
+                    log.exception("Fetching notifications for %s failed", cid)
         events: dict[str, L.MoonEvent] = {}
-        for cid in NOTIFY_CHAR_IDS:
-            try:
-                for n in await self.seat.moon_notifications(cid, since):
-                    ev = L.parse_notification(n)
-                    if ev:
-                        events[ev.key] = ev
-            except Exception:
-                log.exception("Fetching notifications for %s failed", cid)
+        for n in rows:
+            ev = L.parse_notification(n)
+            if ev:
+                events[ev.key] = ev
 
         now = datetime.now(timezone.utc)
-        new = 0
+        changed = 0
         for ev in sorted(events.values(), key=lambda e: e.timestamp):
             is_pop = ev.type in L.POP_EVENT_TYPES
             fresh = now - ev.timestamp < timedelta(hours=PING_MAX_AGE_H)
             should_announce = is_pop and fresh and not first_run
-            if self.store.add_event(ev, announced=not should_announce):
-                new += 1
-                if should_announce and await self.announce_pop(ev):
-                    self.store.mark_announced(ev.key)
-        if first_run:
-            log.info("First run: imported %d historical events without pinging", len(events))
-        return new
+            result = self.store.add_event(ev, announced=not should_announce)
+            if result != "same":
+                changed += 1
+            if result == "new" and should_announce and await self.announce_pop(ev):
+                self.store.mark_announced(ev.key)
+        self.store.set("events_source", source)
+        if full:
+            log.info("Full import from %s: %d moon events", source, len(events))
+        return changed
 
     async def announce_pop(self, ev: L.MoonEvent) -> bool:
         ch = self.channel(K_PING_CH)

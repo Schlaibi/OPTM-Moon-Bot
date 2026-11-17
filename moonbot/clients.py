@@ -83,6 +83,39 @@ class SeatClient:
         return [n for n in rows if n.get("type") in MOON_EVENT_TYPES]
 
 
+class SeatDb:
+    """Read-only access to SeAT's MariaDB, used only for moon notifications.
+
+    The SeAT API drops the ore type ids from oreVolumeByType; the raw YAML stored
+    in `character_notifications.text` still has them. Only SELECTs are issued.
+    """
+
+    def __init__(self, host: str, port: int, database: str, user: str, password: str):
+        self.params = dict(host=host, port=port, database=database, user=user,
+                           password=password, charset="utf8mb4", connect_timeout=10,
+                           read_timeout=60, autocommit=True)
+
+    def _query(self, character_ids: list[int], since: datetime | None) -> list[dict]:
+        import pymysql  # optional dependency, only needed with SEAT_DB_HOST
+        sql = ("SELECT type, timestamp, text FROM character_notifications "
+               f"WHERE character_id IN ({','.join(['%s'] * len(character_ids))}) "
+               f"AND type IN ({','.join(['%s'] * len(MOON_EVENT_TYPES))})")
+        args: list = [*character_ids, *MOON_EVENT_TYPES]
+        if since is not None:
+            sql += " AND timestamp >= %s"
+            args.append(since.strftime("%Y-%m-%d %H:%M:%S"))
+        conn = pymysql.connect(**self.params, cursorclass=pymysql.cursors.DictCursor)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, args)
+                return list(cur.fetchall())
+        finally:
+            conn.close()
+
+    async def moon_notifications(self, character_ids: list[int], since: datetime | None = None) -> list[dict]:
+        return await asyncio.to_thread(self._query, character_ids, since)
+
+
 class EsiClient:
     def __init__(self, session: aiohttp.ClientSession):
         self.s = session

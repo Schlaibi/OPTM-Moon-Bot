@@ -45,6 +45,15 @@ cp .env.example .env    # alle Werte eintragen
 id                      # uid/gid als PUID/PGID in die .env
 ```
 
+### 3b. Optional: SeAT-Datenbank für Erznamen (empfohlen)
+Die SeAT-API verliert die Erz-Typen, die SeAT-Datenbank hat sie noch. Läuft SeAT mit Docker auf demselben Server:
+```bash
+cp docker-compose.seatdb.yml docker-compose.override.yml
+docker ps --format '{{.Names}}'                                            # DB-Container finden (mariadb/mysql)
+docker inspect <db-container> --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
+```
+In die `.env`: `SEAT_NETWORK` (Netzwerk von oben), `SEAT_DB_HOST` (Name des DB-Containers) und Name, User und Passwort der Datenbank aus der `.env` von SeAT. Der Bot liest damit nur die Tabelle `character_notifications` (nur `SELECT`). Ohne DB fällt er auf die API zurück, dann müssen die Erze per `/moons ores` gesetzt werden.
+
 ### 4. Testlauf ohne Discord (empfohlen)
 ```bash
 docker compose run --rm moonbot python -m moonbot.check
