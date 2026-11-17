@@ -50,3 +50,15 @@ def test_parse_structure_filters_athanor():
     assert s.name.startswith("XX-TEST") and s.fuel_expires.day == 10 and not s.drill_online
     assert L.parse_structure({**raw, "type": {"typeID": 81826}}) is None  # Metenox
     assert L.parse_structure({**raw, "fuel_expires": None}).fuel_expires is None
+
+
+def test_watch_list_and_structures_seen():
+    s = Store(":memory:")
+    assert s.watched() == {}
+    s.add_watched(99, 98000001, "Rented - Moon Thing", "tester")
+    assert s.watched() == {99: (98000001, "Rented - Moon Thing")}
+    assert s.remove_watched(99) and not s.remove_watched(99)
+    e1 = ev(minute=1); e1.structure_name = "Old name"
+    e2 = ev(minute=2); e2.structure_name = "New name"
+    s.add_event(e1, True); s.add_event(e2, True)
+    assert s.structures_seen()[42].structure_name == "New name"

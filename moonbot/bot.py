@@ -32,6 +32,8 @@ SEAT_TOKEN = env("SEAT_TOKEN", required=True)
 CORP_ID = int(env("CORP_ID", required=True))
 NOTIFY_CHAR_IDS = [int(x) for x in env("NOTIFY_CHAR_IDS", required=True).split(",") if x.strip()]
 TAX_COLLECTOR = env("TAX_COLLECTOR", "The tax collector")
+# Corps we rent moons from. Their Athanors are only shown once added with /moons add.
+RENTED_CORP_IDS = [int(x) for x in env("RENTED_CORP_IDS", "").split(",") if x.strip()]
 GUILD_ID = int(env("GUILD_ID", "0") or 0)
 DB_PATH = env("DB_PATH", "/data/moonbot.db")
 STATUS_INTERVAL_MIN = int(env("STATUS_INTERVAL_MIN", "60"))
@@ -57,7 +59,9 @@ class MoonBot(discord.Client):
         self.http_session: aiohttp.ClientSession | None = None
         self.seat: SeatClient | None = None
         self.esi: EsiClient | None = None
-        self.known_moons: dict[int, tuple[str, L.MoonState]] = {}  # for /moons ores
+        self.known_moons: dict[int, tuple[str, L.MoonState]] = {}  # shown moons, for autocomplete
+        self.tracked_ids: set[int] | None = None  # own + watched Athanors; only these get pinged
+        self.candidates: dict[int, tuple[int | None, str]] = {}  # rentable, not yet watched
         self.tree.add_command(build_commands(self))
 
     async def setup_hook(self):
@@ -131,10 +135,14 @@ class MoonBot(discord.Client):
             if ev:
                 events[ev.key] = ev
 
+        if self.tracked_ids is None:
+            await self.load_structures()
         now = datetime.now(timezone.utc)
         changed = 0
         for ev in sorted(events.values(), key=lambda e: e.timestamp):
-            is_pop = ev.type in L.POP_EVENT_TYPES
+            # Events of every structure are stored (so a moon added later has history),
+            # but only our own and watched (rented) Athanors get pinged.
+            is_pop = ev.type in L.POP_EVENT_TYPES and ev.structure_id in self.tracked_ids
             fresh = now - ev.timestamp < timedelta(hours=PING_MAX_AGE_H)
             should_announce = is_pop and fresh and not first_run
             result = self.store.add_event(ev, announced=not should_announce)
@@ -184,10 +192,54 @@ class MoonBot(discord.Client):
 
     # ------------------------------------------------------------------ status posts
 
+    async def load_structures(self) -> list[L.StructureInfo]:
+        """Own Athanors plus watched (rented) ones. Also refreshes tracked_ids and the
+        /moons add candidates."""
+        own = [s for s in (L.parse_structure(r) for r in await self.seat.structures(CORP_ID)) if s]
+        own_ids = {s.structure_id for s in own}
+
+        # Rented corps: SeAT only has their structures if one of our chars there has roles.
+        landlord: dict[int, tuple[int, L.StructureInfo]] = {}
+        for corp in RENTED_CORP_IDS:
+            try:
+                for s in (L.parse_structure(r) for r in await self.seat.structures(corp)):
+                    if s:
+                        landlord[s.structure_id] = (corp, s)
+            except Exception as e:
+                log.info("No structure data for rented corp %s in SeAT (%s)", corp, e)
+
+        watched = self.store.watched()
+        seen = self.store.structures_seen()
+        corp_names = await self.resolve_names({c for c, _ in watched.values() if c} | set(RENTED_CORP_IDS))
+        sys_names = await self.resolve_names({e.solar_system_id for e in seen.values()})
+
+        rented: list[L.StructureInfo] = []
+        for sid, (corp, name) in watched.items():
+            if sid in own_ids:
+                continue
+            if sid in landlord:
+                s = landlord[sid][1]
+            else:  # SeAT can't see the structure: build it from the notifications
+                ev = seen.get(sid)
+                s = L.StructureInfo(sid, (ev.structure_name if ev else None) or name,
+                                    sys_names.get(ev.solar_system_id, "?") if ev else "?",
+                                    None, fuel_known=False)
+            s.rented_from = corp_names.get(corp, "a landlord") if corp else "a landlord"
+            rented.append(s)
+
+        cands: dict[int, tuple[int | None, str]] = {}
+        for sid, (corp, s) in landlord.items():
+            cands[sid] = (corp, s.name)
+        for sid, ev in seen.items():
+            if sid not in cands and ev.structure_name:
+                cands[sid] = (RENTED_CORP_IDS[0] if len(RENTED_CORP_IDS) == 1 else None, ev.structure_name)
+        self.candidates = {sid: c for sid, c in cands.items() if sid not in own_ids and sid not in watched}
+        self.tracked_ids = own_ids | set(watched)
+        return own + rented
+
     async def refresh_status(self) -> int:
         ch = self.channel(K_STATUS_CH)
-        raw = await self.seat.structures(CORP_ID)
-        structures = [s for s in (L.parse_structure(r) for r in raw) if s]
+        structures = await self.load_structures()
         now = datetime.now(timezone.utc)
 
         states = {s.structure_id: L.compute_state(self.store.events_for(s.structure_id), now)
@@ -326,8 +378,56 @@ def build_commands(bot: MoonBot) -> app_commands.Group:
             f"**Fuel warning:** {bot.warn_days()} days\n"
             f"**Corp:** {CORP_ID} · **Notification chars:** {', '.join(map(str, NOTIFY_CHAR_IDS))}\n"
             f"**Intervals:** status {STATUS_INTERVAL_MIN} min, notifications {NOTIF_INTERVAL_MIN} min\n"
-            f"**Stored moon events:** {bot.store.event_count()}",
+            f"**Stored moon events:** {bot.store.event_count()}\n"
+            f"**Rented moons (watch list):** "
+            + (", ".join(n for _, n in bot.store.watched().values()) or "—"),
             ephemeral=True)
+
+    @group.command(name="add", description="Add a rented Athanor of another corp to the watch list")
+    @app_commands.describe(athanor="Athanor seen in SeAT or in the notifications")
+    async def add(inter: discord.Interaction, athanor: str):
+        await inter.response.defer(ephemeral=True, thinking=True)
+        async with bot.lock:
+            await bot.load_structures()
+            if not athanor.isdigit() or int(athanor) not in bot.candidates:
+                await inter.followup.send(
+                    "⚠️ Unknown Athanor. It shows up here once SeAT has its structure or one of its "
+                    "moon notifications (add the renter char to NOTIFY_CHAR_IDS).", ephemeral=True)
+                return
+            corp, name = bot.candidates[int(athanor)]
+            bot.store.add_watched(int(athanor), corp, name, str(inter.user))
+            await bot.refresh_status()
+        await inter.followup.send(f"✅ **{name}** is now on the watch list.", ephemeral=True)
+
+    @add.autocomplete("athanor")
+    async def add_autocomplete(inter: discord.Interaction, current: str):
+        if not bot.candidates:
+            try:
+                await bot.load_structures()
+            except Exception:
+                log.exception("Loading candidates failed")
+        return [app_commands.Choice(name=n[:100], value=str(sid))
+                for sid, (_, n) in sorted(bot.candidates.items(), key=lambda kv: kv[1][1])
+                if current.lower() in n.lower()][:25]
+
+    @group.command(name="remove", description="Remove a rented Athanor from the watch list")
+    async def remove(inter: discord.Interaction, athanor: str):
+        await inter.response.defer(ephemeral=True, thinking=True)
+        watched = bot.store.watched()
+        if not athanor.isdigit() or int(athanor) not in watched:
+            await inter.followup.send("⚠️ That Athanor is not on the watch list.", ephemeral=True)
+            return
+        bot.store.remove_watched(int(athanor))
+        async with bot.lock:
+            await bot.refresh_status()  # deletes its status post
+        await inter.followup.send(f"✅ **{watched[int(athanor)][1]}** removed from the watch list.",
+                                  ephemeral=True)
+
+    @remove.autocomplete("athanor")
+    async def remove_autocomplete(inter: discord.Interaction, current: str):
+        return [app_commands.Choice(name=n[:100], value=str(sid))
+                for sid, (_, n) in sorted(bot.store.watched().items(), key=lambda kv: kv[1][1])
+                if current.lower() in n.lower()][:25]
 
     @group.command(name="ores", description="Tell the bot which ores a moon has (SeAT drops the ore names)")
     @app_commands.describe(athanor="The Athanor / moon",

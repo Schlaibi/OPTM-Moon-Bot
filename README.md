@@ -83,10 +83,20 @@ Ohne `ping_role` wird mit `@here` gepingt. Die Befehle sehen nur Leute mit „Se
 | `/moons setup` | Channels und Ping-Rolle festlegen, danach sofort alle Posts erzeugen |
 | `/moons ores <athanor> <erze>` | Einmalig pro Mond: welche Erze er hat, z. B. `Sylvite, Scheelite, Sperrylite, Chromite` (Reihenfolge egal) |
 | `/moons ping <athanor>` | Pop-Nachricht mit Ping für einen Mond mit offenem Belt nachträglich posten (💥 in der Auswahl = Belt offen) |
+| `/moons add <athanor>` | Gemieteten Mond einer anderen Corp auf die Watchlist setzen |
+| `/moons remove <athanor>` | Gemieteten Mond wieder entfernen (sein Status-Post verschwindet) |
 | `/moons refresh` | Sofort neue Daten aus SeAT holen und alle Posts aktualisieren |
 | `/moons fuelwarn <tage>` | Ab wann der Fuel-Status rot wird (gelb ab dem Doppelten). Standard: 7 |
 | `/moons config` | Aktuelle Einstellungen anzeigen |
 | `/moons testpop` | Vorschau einer Pop-Nachricht, nur für dich sichtbar, ohne Ping |
+
+## Gemietete Monde
+Für Monde, die ihr von einer anderen Corp mietet:
+1. In der `.env` die Corp-ID des Vermieters bei `RENTED_CORP_IDS` eintragen und euren Mieter-Charakter zusätzlich bei `NOTIFY_CHAR_IDS` (kommagetrennt).
+2. Bot neu starten, dann `/moons add` und den Mond aus der Liste wählen.
+3. Endet die Miete: `/moons remove`.
+
+Hat SeAT die Strukturen des Vermieters (euer Charakter hat dort Rollen), zeigt der Post auch den Fuel-Stand. Sonst kommen Status, Erze und Pops aus den Notifications des Mieter-Charakters, und beim Fuel steht „Unknown“. Pings gibt es nur für eigene und gemietete Monde auf der Watchlist, auch wenn der Charakter Notifications für weitere Monde des Vermieters bekommt.
 
 ## Verhalten
 - **Erster Start:** Alle vorhandenen Notifications werden importiert, aber **nicht** gepingt.

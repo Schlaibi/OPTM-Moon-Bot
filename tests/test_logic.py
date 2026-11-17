@@ -170,3 +170,12 @@ def test_ore_breakdown_unknown_or_mismatch():
     assert L.ore_breakdown([1.0, 2.0], [], [45491]) == [(None, 2.0), (None, 1.0)]
     text = L.ore_lines([(None, 2.0)], {})
     assert "Ore #1" in text and "/moons ores" in text
+
+
+def test_render_rented_without_fuel():
+    s = L.StructureInfo(SID, "Rented - Refinery", "XX-TEST", None, fuel_known=False,
+                        rented_from="Landlord Corp")
+    now = START + timedelta(days=1)
+    e = L.render_status(s, L.compute_state([started()], now), {}, now, 7)
+    assert "Rented from Landlord Corp" in e["description"]
+    assert "Unknown" in e["fields"][0]["value"] and "NO FUEL" not in e["fields"][0]["value"]

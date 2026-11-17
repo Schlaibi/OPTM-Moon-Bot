@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .logic import MoonEvent
 
@@ -25,6 +25,13 @@ CREATE TABLE IF NOT EXISTS status_messages (
 );
 CREATE TABLE IF NOT EXISTS names (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS moon_ores (moon_id INTEGER PRIMARY KEY, type_ids TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS watched (
+    structure_id INTEGER PRIMARY KEY,
+    corp_id INTEGER,
+    name TEXT NOT NULL,
+    added_by TEXT,
+    added_at TEXT
+);
 """
 
 
@@ -116,6 +123,30 @@ class Store:
     def drop_status_message(self, structure_id: int) -> None:
         self.db.execute("DELETE FROM status_messages WHERE structure_id=?", (structure_id,))
         self.db.commit()
+
+    def structures_seen(self) -> dict[int, MoonEvent]:
+        """Latest stored event per structure (name, system, moon of every Athanor
+        that ever showed up in the notifications)."""
+        latest: dict[int, MoonEvent] = {}
+        for (raw,) in self.db.execute("SELECT data FROM events ORDER BY ts"):
+            ev = _event_from_json(raw)
+            latest[ev.structure_id] = ev
+        return latest
+
+    # watch list (rented moons of other corps)
+    def watched(self) -> dict[int, tuple[int | None, str]]:
+        rows = self.db.execute("SELECT structure_id, corp_id, name FROM watched")
+        return {sid: (corp, name) for sid, corp, name in rows}
+
+    def add_watched(self, structure_id: int, corp_id: int | None, name: str, added_by: str) -> None:
+        self.db.execute("INSERT OR REPLACE INTO watched VALUES (?, ?, ?, ?, ?)",
+                        (structure_id, corp_id, name, added_by, datetime.now(timezone.utc).isoformat()))
+        self.db.commit()
+
+    def remove_watched(self, structure_id: int) -> bool:
+        cur = self.db.execute("DELETE FROM watched WHERE structure_id=?", (structure_id,))
+        self.db.commit()
+        return cur.rowcount == 1
 
     # ore type config per moon (needed because SeAT drops the type ids)
     def moon_ores(self, moon_id: int | None) -> list[int] | None:

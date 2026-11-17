@@ -244,6 +244,8 @@ class StructureInfo:
     system: str
     fuel_expires: datetime | None
     drill_online: bool = True
+    fuel_known: bool = True        # False for rented moons whose structure SeAT can't see
+    rented_from: str | None = None  # landlord corp name for rented moons
 
 
 def parse_structure(raw: dict) -> StructureInfo | None:
@@ -291,7 +293,9 @@ def render_status(s: StructureInfo, st: MoonState, names: dict[int, str],
     if not s.drill_online:
         lines.append("⚠️ Moon Drilling service is **offline**")
 
-    fields = [{"name": "⛽ Fuel", "value": fuel_line(s.fuel_expires, now, warn_days), "inline": False}]
+    fuel = (fuel_line(s.fuel_expires, now, warn_days) if s.fuel_known
+            else "❔ Unknown — rented, fuel is the landlord's job")
+    fields = [{"name": "⛽ Fuel", "value": fuel, "inline": False}]
     if st.volumes:
         title = "🪨 Last extraction" if st.ore_is_last else "🪨 Ore"
         pairs = ore_breakdown(st.volumes, st.ore_types, configured_ores)
@@ -299,7 +303,9 @@ def render_status(s: StructureInfo, st: MoonState, names: dict[int, str],
 
     return {
         "title": f"🌕 {moon}",
-        "description": f"**{s.name}**\n\n" + "\n".join(lines),
+        "description": f"**{s.name}**\n"
+                       + (f"🏷️ Rented from {s.rented_from}\n" if s.rented_from else "")
+                       + "\n" + "\n".join(lines),
         "color": COLOR.get(st.phase, COLOR[PHASE_UNKNOWN]),
         "fields": fields,
         "footer": {"text": "Last update"},
