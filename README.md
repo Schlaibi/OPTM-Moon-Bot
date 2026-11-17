@@ -82,6 +82,7 @@ Ohne `ping_role` wird mit `@here` gepingt. Die Befehle sehen nur Leute mit „Se
 |---|---|
 | `/moons setup` | Channels und Ping-Rolle festlegen, danach sofort alle Posts erzeugen |
 | `/moons ores <athanor> <erze>` | Einmalig pro Mond: welche Erze er hat, z. B. `Sylvite, Scheelite, Sperrylite, Chromite` (Reihenfolge egal) |
+| `/moons ping <athanor>` | Pop-Nachricht mit Ping für einen Mond mit offenem Belt nachträglich posten (💥 in der Auswahl = Belt offen) |
 | `/moons refresh` | Sofort neue Daten aus SeAT holen und alle Posts aktualisieren |
 | `/moons fuelwarn <tage>` | Ab wann der Fuel-Status rot wird (gelb ab dem Doppelten). Standard: 7 |
 | `/moons config` | Aktuelle Einstellungen anzeigen |

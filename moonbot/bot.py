@@ -147,6 +147,20 @@ class MoonBot(discord.Client):
             log.info("Full import from %s: %d moon events", source, len(events))
         return changed
 
+    async def announce_current_pop(self, structure_id: int) -> str | None:
+        """Manually (re-)announce the open belt of one Athanor. Returns an error text or None."""
+        events = self.store.events_for(structure_id)
+        st = L.compute_state(events, datetime.now(timezone.utc))
+        if st.phase != L.PHASE_FRACTURED or not events:
+            return "This moon has no open belt right now."
+        last = events[-1]
+        ev = L.MoonEvent(L.EV_AUTO_FRACTURE, st.fractured, structure_id, moon_id=st.moon_id,
+                         solar_system_id=last.solar_system_id, structure_name=last.structure_name,
+                         volumes=st.volumes, ore_types=st.ore_types)
+        if not await self.announce_pop(ev):
+            return "No ping channel configured, run /moons setup first."
+        return None
+
     async def announce_pop(self, ev: L.MoonEvent) -> bool:
         ch = self.channel(K_PING_CH)
         if ch is None:
@@ -359,6 +373,33 @@ def build_commands(bot: MoonBot) -> app_commands.Group:
         return [app_commands.Choice(name=n[:100], value=str(sid))
                 for sid, (n, _) in sorted(bot.known_moons.items(), key=lambda kv: kv[1][0])
                 if current.lower() in n.lower()][:25]
+
+    @group.command(name="ping", description="Post the pop announcement (with ping) for a moon whose belt is open")
+    @app_commands.describe(athanor="The Athanor / moon (💥 = belt open)")
+    async def ping(inter: discord.Interaction, athanor: str):
+        await inter.response.defer(ephemeral=True, thinking=True)
+        if not bot.known_moons:
+            async with bot.lock:
+                await bot.refresh_status()
+        if not athanor.isdigit() or int(athanor) not in bot.known_moons:
+            await inter.followup.send("⚠️ Unknown Athanor.", ephemeral=True)
+            return
+        try:
+            error = await bot.announce_current_pop(int(athanor))
+        except Exception as e:
+            log.exception("Manual ping failed")
+            error = f"Ping failed: `{e}`"
+        name = bot.known_moons[int(athanor)][0]
+        await inter.followup.send(f"⚠️ {error}" if error else f"✅ Pinged the pop of **{name}**.",
+                                  ephemeral=True)
+
+    @ping.autocomplete("athanor")
+    async def ping_autocomplete(inter: discord.Interaction, current: str):
+        items = sorted(bot.known_moons.items(),
+                       key=lambda kv: (kv[1][1].phase != L.PHASE_FRACTURED, kv[1][0]))
+        return [app_commands.Choice(
+                    name=(("💥 " if st.phase == L.PHASE_FRACTURED else "") + n)[:100], value=str(sid))
+                for sid, (n, st) in items if current.lower() in n.lower()][:25]
 
     @group.command(name="testpop", description="Preview a pop announcement (only you see it, no ping)")
     async def testpop(inter: discord.Interaction):
