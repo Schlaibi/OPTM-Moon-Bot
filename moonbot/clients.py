@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 import aiohttp
 
-from .logic import MOON_EVENT_TYPES, parse_ts
+from .logic import MOON_EVENT_TYPES, Extraction, parse_ts
 
 
 def _norm(ts: str) -> str:
@@ -84,10 +84,11 @@ class SeatClient:
 
 
 class SeatDb:
-    """Read-only access to SeAT's MariaDB, used only for moon notifications.
+    """Read-only access to SeAT's MariaDB: moon notifications and extractions.
 
     The SeAT API drops the ore type ids from oreVolumeByType; the raw YAML stored
-    in `character_notifications.text` still has them. Only SELECTs are issued.
+    in `character_notifications.text` still has them. Extraction times come from
+    `corporation_industry_mining_extractions`. Only SELECTs are issued.
     """
 
     def __init__(self, host: str, port: int, database: str, user: str, password: str):
@@ -114,6 +115,46 @@ class SeatDb:
 
     async def moon_notifications(self, character_ids: list[int], since: datetime | None = None) -> list[dict]:
         return await asyncio.to_thread(self._query, character_ids, since)
+
+    def _select(self, sql: str, args: list) -> list[dict]:
+        import pymysql
+        conn = pymysql.connect(**self.params, cursorclass=pymysql.cursors.DictCursor)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, args)
+                return list(cur.fetchall())
+        finally:
+            conn.close()
+
+    async def extractions(self, corp_ids: list[int], since: datetime) -> list[Extraction]:
+        """Moon extractions SeAT pulled from ESI (needs a Director of that corp in SeAT).
+        Only extractions whose autofracture is after `since`."""
+        if not corp_ids:
+            return []
+        sql = ("SELECT corporation_id, structure_id, moon_id, extraction_start_time, "
+               "chunk_arrival_time, natural_decay_time FROM corporation_industry_mining_extractions "
+               f"WHERE corporation_id IN ({','.join(['%s'] * len(corp_ids))}) "
+               "AND natural_decay_time >= %s")
+        rows = await asyncio.to_thread(self._select, sql,
+                                       [*corp_ids, since.strftime("%Y-%m-%d %H:%M:%S")])
+        utc = lambda d: d.replace(tzinfo=timezone.utc) if d else None  # noqa: E731
+        return [Extraction(int(r["corporation_id"]), int(r["structure_id"]),
+                           int(r["moon_id"]) if r["moon_id"] else None,
+                           utc(r["extraction_start_time"]), utc(r["chunk_arrival_time"]),
+                           utc(r["natural_decay_time"])) for r in rows]
+
+    async def structure_info(self, structure_ids: list[int]) -> dict[int, dict]:
+        """Name / type / system of structures SeAT knows (universe_structures). Best effort."""
+        if not structure_ids:
+            return {}
+        sql = (f"SELECT * FROM universe_structures WHERE structure_id IN "
+               f"({','.join(['%s'] * len(structure_ids))})")
+        try:
+            rows = await asyncio.to_thread(self._select, sql, list(structure_ids))
+        except Exception as e:
+            log.info("universe_structures not readable (%s)", e)
+            return {}
+        return {int(r["structure_id"]): r for r in rows}
 
 
 class EsiClient:

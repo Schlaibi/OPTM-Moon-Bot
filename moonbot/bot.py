@@ -62,6 +62,7 @@ class MoonBot(discord.Client):
         self.known_moons: dict[int, tuple[str, L.MoonState]] = {}  # shown moons, for autocomplete
         self.tracked_ids: set[int] | None = None  # own + watched Athanors; only these get pinged
         self.candidates: dict[int, tuple[int | None, str]] = {}  # rentable, not yet watched
+        self.extractions: dict[int, list[L.Extraction]] = {}  # from SeAT DB, per structure
         self.tree.add_command(build_commands(self))
 
     async def setup_hook(self):
@@ -108,6 +109,11 @@ class MoonBot(discord.Client):
             except Exception:
                 log.exception("ESI name lookup failed")
         return known
+
+    def events(self, structure_id: int) -> list[L.MoonEvent]:
+        """Stored notification events plus extraction-table entries without a notification."""
+        return L.merge_extractions(self.store.events_for(structure_id),
+                                   self.extractions.get(structure_id, []))
 
     # ------------------------------------------------------------------ notifications
 
@@ -161,13 +167,15 @@ class MoonBot(discord.Client):
 
     async def announce_current_pop(self, structure_id: int) -> str | None:
         """Manually (re-)announce the open belt of one Athanor. Returns an error text or None."""
-        events = self.store.events_for(structure_id)
+        events = self.events(structure_id)
         st = L.compute_state(events, datetime.now(timezone.utc))
         if st.phase != L.PHASE_FRACTURED or not events:
             return "This moon has no open belt right now."
-        last = events[-1]
+        named = [e for e in events if e.structure_name]
+        last = max(named, key=lambda e: e.timestamp) if named else events[-1]
+        name = last.structure_name or self.known_moons.get(structure_id, (None,))[0]
         ev = L.MoonEvent(L.EV_AUTO_FRACTURE, st.fractured, structure_id, moon_id=st.moon_id,
-                         solar_system_id=last.solar_system_id, structure_name=last.structure_name,
+                         solar_system_id=last.solar_system_id, structure_name=name,
                          volumes=st.volumes, ore_types=st.ore_types)
         if not await self.announce_pop(ev):
             return "No ping channel configured, run /moons setup first."
@@ -212,10 +220,27 @@ class MoonBot(discord.Client):
             except Exception as e:
                 log.info("No structure data for rented corp %s in SeAT (%s)", corp, e)
 
+        # Extraction times straight from SeAT's DB (own corp and landlords, if SeAT has them)
+        by_sid: dict[int, list[L.Extraction]] = {}
+        if self.seatdb:
+            try:
+                since = datetime.now(timezone.utc) - timedelta(days=14)
+                for x in await self.seatdb.extractions([CORP_ID, *RENTED_CORP_IDS], since):
+                    by_sid.setdefault(x.structure_id, []).append(x)
+            except Exception:
+                log.exception("Reading extractions from SeAT DB failed")
+        self.extractions = by_sid
+
         watched = self.store.watched()
         seen = self.store.structures_seen()
+        # Landlord structures only known from the extraction table: name, type and system
+        unknown = [sid for sid, xs in by_sid.items() if xs[0].corp_id != CORP_ID
+                   and sid not in landlord and sid not in own_ids]
+        info = await self.seatdb.structure_info(unknown) if self.seatdb and unknown else {}
         corp_names = await self.resolve_names({c for c, _ in watched.values() if c} | set(RENTED_CORP_IDS))
-        sys_names = await self.resolve_names({e.solar_system_id for e in seen.values()})
+        sys_names = await self.resolve_names({e.solar_system_id for e in seen.values()}
+                                             | {r.get("solar_system_id") for r in info.values()})
+        moon_names = await self.resolve_names({by_sid[sid][0].moon_id for sid in unknown})
 
         rented: list[L.StructureInfo] = []
         for sid, (corp, name) in watched.items():
@@ -223,11 +248,11 @@ class MoonBot(discord.Client):
                 continue
             if sid in landlord:
                 s = landlord[sid][1]
-            else:  # SeAT can't see the structure: build it from the notifications
-                ev = seen.get(sid)
-                s = L.StructureInfo(sid, (ev.structure_name if ev else None) or name,
-                                    sys_names.get(ev.solar_system_id, "?") if ev else "?",
-                                    None, fuel_known=False)
+            else:  # SeAT can't see the structure: build it from notifications / DB
+                ev, row = seen.get(sid), info.get(sid, {})
+                sys_id = (ev.solar_system_id if ev else None) or row.get("solar_system_id")
+                s = L.StructureInfo(sid, (ev.structure_name if ev else None) or row.get("name") or name,
+                                    sys_names.get(sys_id, "?"), None, fuel_known=False)
             s.rented_from = corp_names.get(corp, "a landlord") if corp else "a landlord"
             rented.append(s)
 
@@ -236,7 +261,15 @@ class MoonBot(discord.Client):
             cands[sid] = (corp, s.name)
         for sid, ev in seen.items():
             if sid not in cands and ev.structure_name:
-                cands[sid] = (RENTED_CORP_IDS[0] if len(RENTED_CORP_IDS) == 1 else None, ev.structure_name)
+                corp = by_sid[sid][0].corp_id if sid in by_sid else None
+                cands[sid] = (corp or (RENTED_CORP_IDS[0] if len(RENTED_CORP_IDS) == 1 else None),
+                              ev.structure_name)
+        for sid in unknown:
+            row = info.get(sid, {})
+            if sid in cands or (row.get("type_id") and int(row["type_id"]) != L.ATHANOR_TYPE_ID):
+                continue  # already listed, or a Tatara / Metenox
+            x = by_sid[sid][0]
+            cands[sid] = (x.corp_id, row.get("name") or moon_names.get(x.moon_id) or str(sid))
         self.candidates = {sid: c for sid, c in cands.items() if sid not in own_ids and sid not in watched}
         self.tracked_ids = own_ids | set(watched)
         return own + rented
@@ -246,7 +279,7 @@ class MoonBot(discord.Client):
         structures = await self.load_structures()
         now = datetime.now(timezone.utc)
 
-        states = {s.structure_id: L.compute_state(self.store.events_for(s.structure_id), now)
+        states = {s.structure_id: L.compute_state(self.events(s.structure_id), now)
                   for s in structures}
         configured = {sid: self.store.moon_ores(st.moon_id) for sid, st in states.items()}
         ids = set()

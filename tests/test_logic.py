@@ -179,3 +179,29 @@ def test_render_rented_without_fuel():
     e = L.render_status(s, L.compute_state([started()], now), {}, now, 7)
     assert "Rented from Landlord Corp" in e["description"]
     assert "Unknown" in e["fields"][0]["value"] and "NO FUEL" not in e["fields"][0]["value"]
+
+
+def extraction(start=START, ready=READY, auto=AUTO, sid=SID):
+    return L.Extraction(98000001, sid, 40349232, start, ready, auto)
+
+
+def test_extraction_fills_missing_start_notification():
+    # Only a pop from the previous cycle is known; the current drill only from the DB table
+    old_pop = L.MoonEvent(L.EV_LASER_FIRED, START - timedelta(days=3), SID, volumes=[5.0, 6.0])
+    events = L.merge_extractions([old_pop], [extraction()])
+    st = L.compute_state(events, START + timedelta(days=1))
+    assert st.phase == L.PHASE_DRILLING and st.ready == READY and st.auto == AUTO
+    assert st.volumes == [5.0, 6.0] and st.ore_is_last  # ore is from the last cycle
+
+
+def test_notification_wins_over_extraction_row():
+    events = L.merge_extractions([started()], [extraction(start=START + timedelta(seconds=40))])
+    assert len(events) == 1
+    st = L.compute_state(events, START + timedelta(days=1))
+    assert st.volumes and not st.ore_is_last
+
+
+def test_cancel_notification_beats_extraction_row():
+    cancel = L.MoonEvent(L.EV_CANCELLED, START + timedelta(days=1), SID)
+    st = L.compute_state(L.merge_extractions([cancel], [extraction()]), START + timedelta(days=2))
+    assert st.phase == L.PHASE_IDLE

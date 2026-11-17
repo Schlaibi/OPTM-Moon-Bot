@@ -5,7 +5,7 @@ the API key, the optional SeAT DB connection and the data before going live.
 """
 import asyncio
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
@@ -19,6 +19,7 @@ async def main():
     token = os.environ["SEAT_TOKEN"]
     corp = int(os.environ["CORP_ID"])
     chars = [int(x) for x in os.environ["NOTIFY_CHAR_IDS"].split(",") if x.strip()]
+    rented = [int(x) for x in os.environ.get("RENTED_CORP_IDS", "").split(",") if x.strip()]
     db_host = os.environ.get("SEAT_DB_HOST", "")
     now = datetime.now(timezone.utc)
 
@@ -34,7 +35,11 @@ async def main():
                         os.environ.get("SEAT_DB_PASSWORD", ""))
             notifs = await db.moon_notifications(chars)
             print(f"SeAT DB @ {db_host}: {len(notifs)} moon notifications")
+            xs = await db.extractions([corp, *rented], now - timedelta(days=14))
+            print(f"SeAT DB: {len(xs)} extractions of the last 14 days "
+                  f"({sum(x.corp_id == corp for x in xs)} own, {sum(x.corp_id != corp for x in xs)} rented corps)")
         else:
+            xs = []
             notifs = []
             for c in chars:
                 notifs += await seat.moon_notifications(c)
@@ -52,10 +57,11 @@ async def main():
         ids = {e.moon_id for e in events.values()} | {t for e in events.values() for t in e.ore_types}
         names = await esi.names(list(ids))
         for a in athanors:
-            st = L.compute_state(by_sid.get(a.structure_id, []), now)
+            mine = [x for x in xs if x.structure_id == a.structure_id]
+            st = L.compute_state(L.merge_extractions(by_sid.get(a.structure_id, []), mine), now)
             print(f"\n{a.name} [{a.system}]  fuel={a.fuel_expires}  drill_online={a.drill_online}")
             print(f"  moon={names.get(st.moon_id)} phase={st.phase} ready={st.ready} "
-                  f"progress={st.progress(now):.0%}")
+                  f"progress={st.progress(now):.0%} extraction_rows={len(mine)}")
             pairs = L.ore_breakdown(st.volumes, st.ore_types, None)
             print("    ore:", ", ".join(f"{L.ore_name(t, i + 1, names)} {L.fmt_volume(v)}"
                                        for i, (t, v) in enumerate(pairs)),

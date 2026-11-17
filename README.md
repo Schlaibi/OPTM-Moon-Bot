@@ -13,6 +13,9 @@ Discord-Bot, der die Athanor-Monde einer EVE-Corp trackt. Die Daten kommen aussc
 | Athanors, Fuel, Drill-Service | `/api/v2/corporation/structures/{corp}` |
 | Extraction (Ready, Autofracture, Ore) und Pops | `/api/v2/character/notifications/{char}` (`MoonminingExtractionStarted`, `…Finished`, `…Cancelled`, `MoonminingLaserFired`, `MoonminingAutomaticFracture`) |
 | Namen von Monden und Erzen | öffentliches ESI `/universe/names/` (ohne Login) |
+| Extraction-Zeiten (nur mit SeAT-DB, siehe 3b) | Tabelle `corporation_industry_mining_extractions`, für die eigene Corp und die Vermieter-Corps |
+
+Mit SeAT-DB kommen Start, Ready und Autofracture zusätzlich aus der Extraction-Tabelle. Damit stimmt der Status auch, wenn die `ExtractionStarted`-Notification fehlt. Erzmengen und Pops kommen weiter aus den Notifications. Die Tabelle füllt SeAT nur für Corps, bei denen ein eingetragener Charakter Director ist.
 
 **Eigenheiten der SeAT-API:**
 - Sie ignoriert `$filter` und liefert immer 15 Notifications pro Seite. Der Bot liest deshalb beim ersten Start alle Seiten, danach nur noch die neuesten.
@@ -96,7 +99,7 @@ Für Monde, die ihr von einer anderen Corp mietet:
 2. Bot neu starten, dann `/moons add` und den Mond aus der Liste wählen.
 3. Endet die Miete: `/moons remove`.
 
-Hat SeAT die Strukturen des Vermieters (euer Charakter hat dort Rollen), zeigt der Post auch den Fuel-Stand. Sonst kommen Status, Erze und Pops aus den Notifications des Mieter-Charakters, und beim Fuel steht „Unknown“. Pings gibt es nur für eigene und gemietete Monde auf der Watchlist, auch wenn der Charakter Notifications für weitere Monde des Vermieters bekommt.
+Hat SeAT die Strukturen des Vermieters (euer Charakter hat dort Rollen), zeigt der Post auch den Fuel-Stand. Sonst kommen Status, Erze und Pops aus den Notifications des Mieter-Charakters, und beim Fuel steht „Unknown“. Hat SeAT die Extractions des Vermieters in der DB, stimmen die Zeiten auch ohne Notification. Solche Monde stehen dann auch in der Auswahl von `/moons add`. Pings gibt es nur für eigene und gemietete Monde auf der Watchlist, auch wenn der Charakter Notifications für weitere Monde des Vermieters bekommt.
 
 ## Verhalten
 - **Erster Start:** Alle vorhandenen Notifications werden importiert, aber **nicht** gepingt. Danach liest der Bot nur noch die letzten 3 Tage. Ändert sich `NOTIFY_CHAR_IDS` (z. B. ein Mieter-Charakter kommt dazu), wird einmal wieder alles importiert.

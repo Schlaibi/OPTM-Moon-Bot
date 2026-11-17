@@ -101,6 +101,32 @@ def parse_notification(notif: dict) -> MoonEvent | None:
     )
 
 
+@dataclass
+class Extraction:
+    """One row of SeAT's corporation_industry_mining_extractions (from ESI)."""
+    corp_id: int
+    structure_id: int
+    moon_id: int | None
+    start: datetime
+    ready: datetime
+    auto: datetime | None
+
+
+def merge_extractions(events: list[MoonEvent], extractions: list[Extraction]) -> list[MoonEvent]:
+    """Add a synthetic ExtractionStarted for every extraction that has no matching
+    notification (e.g. the character joined SeAT after the drill was started).
+    Notifications win when both exist, because they also carry the ore volumes."""
+    started = [e for e in events if e.type == EV_STARTED]
+    out = list(events)
+    for x in extractions:
+        if any(e.ready_time and abs(e.ready_time - x.ready) < timedelta(minutes=10)
+               or abs(e.timestamp - x.start) < timedelta(hours=2) for e in started):
+            continue
+        out.append(MoonEvent(EV_STARTED, x.start, x.structure_id, moon_id=x.moon_id,
+                             ready_time=x.ready, auto_time=x.auto))
+    return out
+
+
 # --------------------------------------------------------------------------- state
 
 PHASE_UNKNOWN = "unknown"
@@ -136,10 +162,14 @@ class MoonState:
 def compute_state(events: list[MoonEvent], now: datetime) -> MoonState:
     """Replay the moon events of ONE structure and return its current state."""
     st = MoonState()
+    stale = False  # volumes belong to an earlier extraction than the current one
     for ev in sorted(events, key=lambda e: e.timestamp):
         st.moon_id = ev.moon_id or st.moon_id
         if ev.volumes:
             st.volumes, st.ore_types = list(ev.volumes), list(ev.ore_types)
+            stale = False
+        elif ev.type == EV_STARTED:  # extraction without ore data (from the extraction table)
+            stale = True
         if ev.type == EV_STARTED:
             st.phase, st.started, st.ready, st.auto, st.fractured = (
                 PHASE_DRILLING, ev.timestamp, ev.ready_time, ev.auto_time, None)
@@ -160,7 +190,7 @@ def compute_state(events: list[MoonEvent], now: datetime) -> MoonState:
     if st.phase == PHASE_FRACTURED and st.fractured and now >= st.fractured + BELT_LIFETIME:
         st.phase = PHASE_IDLE
 
-    st.ore_is_last = st.phase in (PHASE_IDLE, PHASE_UNKNOWN) and bool(st.volumes)
+    st.ore_is_last = bool(st.volumes) and (stale or st.phase in (PHASE_IDLE, PHASE_UNKNOWN))
     return st
 
 
