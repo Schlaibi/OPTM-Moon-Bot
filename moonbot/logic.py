@@ -163,7 +163,10 @@ def compute_state(events: list[MoonEvent], now: datetime) -> MoonState:
     """Replay the moon events of ONE structure and return its current state."""
     st = MoonState()
     stale = False  # volumes belong to an earlier extraction than the current one
-    for ev in sorted(events, key=lambda e: e.timestamp):
+    # Notifications only have minute precision. Within one minute a cancel / pop / finish
+    # belongs to the previous extraction, so a new start must be replayed last
+    # (e.g. "cancel + restart" or "fire laser + start next drill" in the same minute).
+    for ev in sorted(events, key=lambda e: (e.timestamp, e.type == EV_STARTED)):
         st.moon_id = ev.moon_id or st.moon_id
         if ev.volumes:
             st.volumes, st.ore_types = list(ev.volumes), list(ev.ore_types)

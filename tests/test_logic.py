@@ -235,3 +235,19 @@ def test_refined_value_beats_raw_market_price():
     prices = L.ore_unit_prices(market, yields)
     assert prices[45497] == (100 * 100 + 65 * 1000) / 100
     assert prices[36] == 100.0
+
+
+def test_cancel_and_restart_in_same_minute():
+    t = START.replace(second=0)
+    first = L.MoonEvent(L.EV_STARTED, t, SID, ready_time=READY + timedelta(hours=1), volumes=[2.0])
+    restart = L.MoonEvent(L.EV_STARTED, t + timedelta(minutes=1), SID, ready_time=READY, volumes=[1.0])
+    cancel = L.MoonEvent(L.EV_CANCELLED, t + timedelta(minutes=1), SID)
+    st = L.compute_state([first, restart, cancel], START + timedelta(days=1))  # store order
+    assert st.phase == L.PHASE_DRILLING and st.ready == READY and st.volumes == [1.0]
+
+
+def test_fire_and_start_next_in_same_minute():
+    fired = L.MoonEvent(L.EV_LASER_FIRED, START, SID, volumes=[9.0])
+    nxt = L.MoonEvent(L.EV_STARTED, START, SID, ready_time=READY, volumes=[1.0])
+    st = L.compute_state([nxt, fired], START + timedelta(hours=1))
+    assert st.phase == L.PHASE_DRILLING and st.volumes == [1.0]
