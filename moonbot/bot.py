@@ -178,12 +178,8 @@ class MoonBot(discord.Client):
         )
         role = self.store.get(K_PING_ROLE)
         content = f"<@&{role}>" if role else "@here"
-        msg = await ch.send(content=content, embed=discord.Embed.from_dict(embed),
+        await ch.send(content=content, embed=discord.Embed.from_dict(embed),
                             allowed_mentions=discord.AllowedMentions(everyone=True, roles=True))
-        try:
-            await msg.add_reaction("⛏️")
-        except discord.HTTPException:
-            pass
         return True
 
     # ------------------------------------------------------------------ status posts

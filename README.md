@@ -3,7 +3,7 @@
 Discord-Bot, der die Athanor-Monde einer EVE-Corp trackt. Die Daten kommen ausschließlich über die SeAT-API, der Bot braucht keinen eigenen ESI-Login.
 
 - **Status-Channel:** pro Athanor eine Nachricht, die jede Stunde (und sofort bei neuen Events) bearbeitet wird: Fortschrittsbalken, Ready-/Autofracture-Zeit, Fuel-Ampel, Ore-Zusammensetzung (bzw. „Last extraction“, wenn gerade nichts läuft).
-- **Ping-Channel:** Wenn ein Mond poppt (Laser gefeuert oder Autofracture), kommt ein Ping mit zufälligem Spruch, Ore-Liste und ⛏️-Reaktion zum X-uppen.
+- **Ping-Channel:** Wenn ein Mond poppt (Laser gefeuert oder Autofracture), kommt ein Ping mit zufälligem Spruch und Ore-Liste. Reaktionen: ⛏️ mine mit, 📣 kann FC, 🐋 bringt Boosts. Der Bot reagiert nicht selbst, damit die Zählung stimmt.
 
 ## Woher die Daten kommen
 

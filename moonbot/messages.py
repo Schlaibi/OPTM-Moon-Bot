@@ -29,6 +29,13 @@ CALLS = [
     "**Who can FC this one? Drop a time below and let's get a fleet together.** 📅",
 ]
 
+# The bot does not add these itself, so the counts stay honest.
+REACTIONS = [
+    "⛏️ — I'll mine",
+    "📣 — I can FC",
+    "🐋 — I'll bring boosts (Orca / Porpoise)",
+]
+
 
 def build_pop(moon: str, structure: str, system: str, ore_names: list[str],
               total: str | None, collector: str = "The tax collector",
@@ -39,8 +46,7 @@ def build_pop(moon: str, structure: str, system: str, ore_names: list[str],
     if ore_names:
         lines.append(f"🪨 **Ore:** {' · '.join(ore_names)}" + (f" (≈{total})" if total else ""))
     lines.append(f"📍 **Location:** {system} — {structure}")
-    lines += ["", r.choice(CALLS),
-              "React with ⛏️ if you'd join a fleet — and say so if you can FC or bring boosts!"]
+    lines += ["", r.choice(CALLS), "", "**React so we know who's in:**", *REACTIONS]
     embed = {
         "title": r.choice(HEADLINES),
         "description": "\n".join(lines),
