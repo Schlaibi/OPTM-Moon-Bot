@@ -48,6 +48,7 @@ SEAT_DB_USER = env("SEAT_DB_USER", "seat")
 SEAT_DB_PASSWORD = env("SEAT_DB_PASSWORD", "")
 
 K_STATUS_CH, K_PING_CH, K_PING_ROLE, K_FUEL_WARN = "status_channel", "ping_channel", "ping_role", "fuel_warn_days"
+K_ALERT_CH = "alert_channel"  # optional; fuel / idle-drill alerts, falls back to the ping channel
 
 
 def pop_total(pairs, prices) -> str:
@@ -71,6 +72,7 @@ class MoonBot(discord.Client):
         self.extractions: dict[int, list[L.Extraction]] = {}  # from SeAT DB, per structure
         self.prices: dict[int, float] = {}  # ESI average prices, refreshed every few hours
         self.prices_at: datetime | None = None
+        self.last_structures: list[L.StructureInfo] = []  # for alert checks between refreshes
         self.tree.add_command(build_commands(self))
 
     async def setup_hook(self):
@@ -317,6 +319,8 @@ class MoonBot(discord.Client):
         names = await self.resolve_names(ids)
         prices = await self.get_prices()
         self.known_moons = {s.structure_id: (s.name, states[s.structure_id]) for s in structures}
+        self.last_structures = list(structures)
+        await self.check_alerts(structures, states, names, configured, now)
         if ch is None:  # not set up yet: only refresh the cache for /moons ores
             return len(structures)
 
@@ -337,6 +341,66 @@ class MoonBot(discord.Client):
             await self.delete_message(*existing[sid])
             self.store.drop_status_message(sid)
         return len(structures)
+
+    # ------------------------------------------------------------------ alerts
+
+    async def check_alerts(self, structures, states, names, configured, now) -> None:
+        """Ping once per occurrence: low fuel (all moons) and an idle drill (R32/R64)."""
+        for s in structures:
+            st = states[s.structure_id]
+            conf = configured.get(s.structure_id)
+            pairs = (L.ore_breakdown(st.volumes, st.ore_types, conf) if st.volumes
+                     else [(t, 0.0) for t in conf or []])
+            mclass = L.moon_class(pairs, names)
+            moon = names.get(st.moon_id) or s.name
+            where = f"**{moon}** ({s.name})"
+            landlord = f" Rented from {s.rented_from}, ask them." if s.rented_from else ""
+
+            fuel = L.fuel_alert(s, now)
+            if fuel is not None and self.alert(f"fuel:{s.structure_id}", fuel):
+                when = (f"runs dry {L.dts(s.fuel_expires, 'R')} ({L.eve_time(s.fuel_expires)})"
+                        if s.fuel_expires else "is **out of fuel** (low power)")
+                await self.send_alert("⛽ Fuel low!", f"{where} {when}. Someone please refuel!{landlord}")
+
+            idle = L.drill_idle_alert(st, mclass, now)
+            if idle is not None and self.alert(f"idle:{s.structure_id}", idle):
+                await self.send_alert(
+                    f"⚠️ {L.class_tag(mclass)} moon drill is off!",
+                    f"{where}: no extraction running since {L.dts(st.idle_since, 'R')} "
+                    f"({L.eve_time(st.idle_since)}). Please start the next drill!{landlord}")
+
+    def alert(self, key: str, active: bool) -> bool:
+        """Flag handling: True exactly when an alert should go out now."""
+        k = f"alert:{key}"
+        was = self.store.get(k) == "1"
+        if active and not was:
+            self.store.set(k, "1")
+            return True
+        if not active and was:
+            self.store.set(k, None)
+        return False
+
+    async def send_alert(self, title: str, text: str) -> None:
+        ch = self.channel(K_ALERT_CH) or self.channel(K_PING_CH)
+        if ch is None:
+            log.warning("Alert '%s' but no ping/alert channel configured", title)
+            return
+        role = self.store.get(K_PING_ROLE)
+        await ch.send(content=f"<@&{role}>" if role else "@here",
+                      embed=discord.Embed(title=title, description=text, color=0xEF4444),
+                      allowed_mentions=discord.AllowedMentions(everyone=True, roles=True))
+
+    async def check_alerts_cached(self) -> None:
+        """Alert check between hourly refreshes, without asking SeAT for structures."""
+        if not self.last_structures:
+            return
+        now = datetime.now(timezone.utc)
+        states = {s.structure_id: L.compute_state(self.events(s.structure_id), now)
+                  for s in self.last_structures}
+        configured = {sid: self.store.moon_ores(st.moon_id) for sid, st in states.items()}
+        ids = {i for st in states.values() for i in (st.moon_id, *st.ore_types) if i}
+        ids |= {t for c in configured.values() for t in c or []}
+        await self.check_alerts(self.last_structures, states, self.store.names(ids), configured, now)
 
     async def upsert_message(self, ch, sid: int, existing: tuple[int, int] | None, embed: discord.Embed):
         if existing:
@@ -376,6 +440,8 @@ class MoonBot(discord.Client):
                 new = await self.poll_notifications()
                 if new:  # a moon changed state -> update its post right away
                     await self.refresh_status()
+                else:
+                    await self.check_alerts_cached()
         except Exception:
             log.exception("Notification loop failed")
 
@@ -401,12 +467,15 @@ def build_commands(bot: MoonBot) -> app_commands.Group:
     @group.command(name="setup", description="Choose the status channel and the pop-ping channel")
     @app_commands.describe(status_channel="Channel with one live post per moon",
                            ping_channel="Channel for 'moon popped' announcements",
-                           ping_role="Role to ping (leave empty for @here)")
+                           ping_role="Role to ping (leave empty for @here)",
+                           alert_channel="Channel for fuel / drill-off alerts (default: ping channel)")
     async def setup(inter: discord.Interaction, status_channel: discord.TextChannel,
-                    ping_channel: discord.TextChannel, ping_role: discord.Role | None = None):
+                    ping_channel: discord.TextChannel, ping_role: discord.Role | None = None,
+                    alert_channel: discord.TextChannel | None = None):
         bot.store.set(K_STATUS_CH, str(status_channel.id))
         bot.store.set(K_PING_CH, str(ping_channel.id))
         bot.store.set(K_PING_ROLE, str(ping_role.id) if ping_role else None)
+        bot.store.set(K_ALERT_CH, str(alert_channel.id) if alert_channel else None)
         await inter.response.defer(ephemeral=True, thinking=True)
         try:
             new, count = await bot.run_all()
@@ -439,6 +508,8 @@ def build_commands(bot: MoonBot) -> app_commands.Group:
         await inter.response.send_message(
             f"**Status channel:** {f'<#{s}>' if s else '—'}\n"
             f"**Ping channel:** {f'<#{p}>' if p else '—'}\n"
+            f"**Alert channel:** {f'<#{a}>' if (a := bot.store.get(K_ALERT_CH)) else 'same as ping channel'}"
+            " (fuel < 2 days, R32/R64 drill off > 4h)\n"
             f"**Ping:** {f'<@&{r}>' if r else '@here'}\n"
             f"**Fuel warning:** {bot.warn_days()} days\n"
             f"**Corp:** {CORP_ID} · **Notification chars:** {', '.join(map(str, NOTIFY_CHAR_IDS))}\n"

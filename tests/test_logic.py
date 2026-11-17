@@ -251,3 +251,34 @@ def test_fire_and_start_next_in_same_minute():
     nxt = L.MoonEvent(L.EV_STARTED, START, SID, ready_time=READY, volumes=[1.0])
     st = L.compute_state([nxt, fired], START + timedelta(hours=1))
     assert st.phase == L.PHASE_DRILLING and st.volumes == [1.0]
+
+
+def test_drill_idle_alert_only_for_r32_r64_after_4h():
+    fired = L.MoonEvent(L.EV_LASER_FIRED, READY + timedelta(hours=1), SID, volumes=[1.0])
+    events = [started(), fired]
+    st = L.compute_state(events, fired.timestamp + timedelta(hours=3))
+    assert st.idle_since == fired.timestamp
+    assert L.drill_idle_alert(st, 64, fired.timestamp + timedelta(hours=3)) is None   # < 4h
+    later = fired.timestamp + timedelta(hours=5)
+    st = L.compute_state(events, later)
+    assert L.drill_idle_alert(st, 64, later) is True
+    assert L.drill_idle_alert(st, 16, later) is None                                  # R16: no
+    nxt = L.MoonEvent(L.EV_STARTED, later, SID, ready_time=later + timedelta(days=14))
+    st = L.compute_state(events + [nxt], later + timedelta(minutes=5))
+    assert st.idle_since is None and L.drill_idle_alert(st, 64, later) is False       # re-armed
+
+
+def test_autofracture_by_clock_sets_idle_since():
+    st = L.compute_state([started()], AUTO + timedelta(hours=5))
+    assert st.idle_since == AUTO and L.drill_idle_alert(st, 32, AUTO + timedelta(hours=5))
+
+
+def test_fuel_alert_with_hysteresis():
+    now = START
+    mk = lambda d: L.StructureInfo(SID, "x", "y", now + timedelta(days=d) if d is not None else None)
+    assert L.fuel_alert(mk(1.5), now) is True
+    assert L.fuel_alert(mk(None), now) is True
+    assert L.fuel_alert(mk(2.5), now) is None      # between 2 and 3 days: keep flag
+    assert L.fuel_alert(mk(10), now) is False
+    rented = L.StructureInfo(SID, "x", "y", None, fuel_known=False)
+    assert L.fuel_alert(rented, now) is None

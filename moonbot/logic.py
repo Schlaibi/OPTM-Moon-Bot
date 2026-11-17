@@ -147,6 +147,7 @@ class MoonState:
     volumes: list[float] = field(default_factory=list)  # current, or last known
     ore_types: list[int] = field(default_factory=list)
     ore_is_last: bool = False  # True when ore is from a previous, finished extraction
+    idle_since: datetime | None = None  # drill stopped (pop / cancel) and not restarted since
 
     def progress(self, now: datetime) -> float:
         if self.phase in (PHASE_READY, PHASE_FRACTURED):
@@ -176,25 +177,58 @@ def compute_state(events: list[MoonEvent], now: datetime) -> MoonState:
         if ev.type == EV_STARTED:
             st.phase, st.started, st.ready, st.auto, st.fractured = (
                 PHASE_DRILLING, ev.timestamp, ev.ready_time, ev.auto_time, None)
+            st.idle_since = None
         elif ev.type == EV_FINISHED:
             st.phase, st.fractured = PHASE_READY, None
             st.ready = st.ready or ev.timestamp
             st.auto = ev.auto_time or st.auto
         elif ev.type in POP_EVENT_TYPES:
             st.phase, st.fractured = PHASE_FRACTURED, ev.timestamp
+            st.idle_since = ev.timestamp
         elif ev.type == EV_CANCELLED:
             st.phase = PHASE_IDLE
+            st.idle_since = ev.timestamp
 
     # Advance by clock when a follow-up notification has not arrived (yet).
     if st.phase == PHASE_DRILLING and st.ready and now >= st.ready:
         st.phase = PHASE_READY
     if st.phase == PHASE_READY and st.auto and now >= st.auto:
         st.phase, st.fractured = PHASE_FRACTURED, st.auto
+        st.idle_since = st.auto
     if st.phase == PHASE_FRACTURED and st.fractured and now >= st.fractured + BELT_LIFETIME:
         st.phase = PHASE_IDLE
 
     st.ore_is_last = bool(st.volumes) and (stale or st.phase in (PHASE_IDLE, PHASE_UNKNOWN))
     return st
+
+
+# --------------------------------------------------------------------------- alerts
+
+ALERT_IDLE_CLASSES = (32, 64)        # only valuable moons get the "drill is off" ping
+ALERT_IDLE_AFTER = timedelta(hours=4)
+ALERT_FUEL_BELOW = timedelta(days=2)
+ALERT_FUEL_RESET = timedelta(days=3)  # re-arm the fuel alert only after a real refuel
+
+
+def drill_idle_alert(st: MoonState, mclass: int | None, now: datetime) -> bool | None:
+    """True: alert, False: condition cleared (re-arm), None: keep the current flag."""
+    if st.phase in (PHASE_DRILLING, PHASE_READY):
+        return False
+    if (mclass in ALERT_IDLE_CLASSES and st.idle_since
+            and st.phase in (PHASE_FRACTURED, PHASE_IDLE) and now - st.idle_since >= ALERT_IDLE_AFTER):
+        return True
+    return None
+
+
+def fuel_alert(s: "StructureInfo", now: datetime) -> bool | None:
+    """True: alert, False: refuelled (re-arm), None: keep the current flag."""
+    if not s.fuel_known:
+        return None
+    if s.fuel_expires is None or s.fuel_expires - now < ALERT_FUEL_BELOW:
+        return True
+    if s.fuel_expires - now >= ALERT_FUEL_RESET:
+        return False
+    return None
 
 
 # --------------------------------------------------------------------------- rendering

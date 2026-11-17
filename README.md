@@ -77,7 +77,7 @@ Die Datenbank (Message-IDs, Ore-Konfiguration) liegt in `data/moonbot.db` und bl
 
 ### 6. In Discord einrichten
 ```
-/moons setup status_channel:#moons ping_channel:#moon-pops [ping_role:@Miners]
+/moons setup status_channel:#moons ping_channel:#moon-pops [ping_role:@Miners] [alert_channel:#moon-alerts]
 ```
 Ohne `ping_role` wird mit `@here` gepingt. Die Befehle sehen nur Leute mit „Server verwalten“; das lässt sich unter *Servereinstellungen → Integrationen* anpassen.
 
@@ -109,6 +109,7 @@ Hat SeAT die Strukturen des Vermieters (euer Charakter hat dort Rollen), zeigt d
 - **Ein gesprengter Belt** gilt 48 h nach dem Pop als weg, danach steht der Mond auf „Idle“ mit der letzten Ore-Zusammensetzung.
 - **Verzögerung:** ESI-Cache (~10 min) + SeAT-Abholintervall + `NOTIF_INTERVAL_MIN`.
 
+- **Warnungen (Ping):** Fuel unter 2 Tagen (alle Monde mit bekanntem Fuel) und bei 🟣 R32 / 🟠 R64, wenn nach einem Pop oder Cancel seit über 4 h kein neuer Drill läuft. Jede Warnung kommt einmal pro Fall; die Fuel-Warnung wird erst nach dem Auftanken (≥ 3 Tage) wieder scharf, die Drill-Warnung sobald wieder gebohrt wird. Kanal: `alert_channel` aus `/moons setup`, sonst der Ping-Channel. Geprüft wird alle `NOTIF_INTERVAL_MIN` Minuten.
 - **Mondklasse und Wert:** Jedes Erz bekommt seine Klasse (⚪ R4, 🟢 R8, 🔵 R16, 🟣 R32, 🟠 R64), der Mond die Klasse seines seltensten Erzes. Der Wert ist der Refine-Wert bei 100 % Ausbeute (Ausbeute aus der SDE-Tabelle `invTypeMaterials` in der SeAT-DB, Preise aus dem öffentlichen ESI-Durchschnitt, alle 6 h aktualisiert). Ohne SeAT-DB nimmt der Bot den Marktpreis des Roherzes, der ist bei Mond-Erz aber sehr ungenau.
 
 Sprüche für die Pop-Nachricht stehen in `moonbot/messages.py`, einfach erweitern.
