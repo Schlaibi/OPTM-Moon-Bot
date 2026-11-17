@@ -36,10 +36,13 @@ Die SeAT-API hat keinen Extraction-Endpoint. Der Status wird deshalb aus den Not
 In SeAT unter **API Tokens** einen Key erstellen (für `SEAT_TOKEN`). Wenn SeAT eine IP-Whitelist verlangt, die IP des Docker-Hosts eintragen.
 
 ### 3. Holen und konfigurieren
+Alles (Code, `.env`, Datenbank in `data/`) liegt in einem Verzeichnis, z. B. `~/moonbot`:
 ```bash
-git clone https://github.com/Schlaibi/OPTM-Moon-Bot.git
-cd OPTM-Moon-Bot
+mkdir -p ~/moonbot && cd ~/moonbot
+git clone https://github.com/Schlaibi/OPTM-Moon-Bot.git .   # der Punkt = in dieses Verzeichnis
+mkdir -p data
 cp .env.example .env    # alle Werte eintragen
+id                      # uid/gid als PUID/PGID in die .env
 ```
 
 ### 4. Testlauf ohne Discord (empfohlen)
@@ -58,7 +61,7 @@ docker compose logs -f
 ```bash
 git pull && docker compose up -d --build
 ```
-Die Datenbank (Message-IDs, Ore-Konfiguration) liegt im Docker-Volume `moonbot-data` und bleibt bei Updates erhalten.
+Die Datenbank (Message-IDs, Ore-Konfiguration) liegt in `data/moonbot.db` und bleibt bei Updates erhalten. Zum Sichern einfach das Verzeichnis kopieren.
 
 ### 6. In Discord einrichten
 ```

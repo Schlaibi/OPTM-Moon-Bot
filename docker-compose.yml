@@ -4,8 +4,7 @@ services:
     container_name: moonbot
     restart: unless-stopped
     env_file: .env
+    # Run as the host user that owns ./data (set PUID/PGID in .env, see `id`)
+    user: "${PUID:-1000}:${PGID:-1000}"
     volumes:
-      - moonbot-data:/data
-
-volumes:
-  moonbot-data:
+      - ./data:/data

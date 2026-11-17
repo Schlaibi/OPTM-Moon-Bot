@@ -8,8 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY moonbot ./moonbot
 
-RUN useradd -m bot && mkdir /data && chown bot /data
-USER bot
-VOLUME /data
+# The user is set by docker-compose (PUID/PGID) so files in ./data belong to the host user.
+RUN mkdir /data
 
 CMD ["python", "-m", "moonbot.bot"]
