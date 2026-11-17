@@ -1,0 +1,11 @@
+services:
+  moonbot:
+    build: .
+    container_name: moonbot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - moonbot-data:/data
+
+volumes:
+  moonbot-data:
